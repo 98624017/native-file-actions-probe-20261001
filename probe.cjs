@@ -72,10 +72,15 @@ foreach ($item in $paths) { [void]$files.Add($item) }
 `, files)
     return
   }
+  if (files.some((file) => /[\u0000-\u0008\u000b\u000c\u000e-\u001f\ufffe\uffff]/u.test(file) || Buffer.from(file, 'utf8').toString('utf8') !== file)) {
+    throw new Error('Filename cannot be represented in the native XML file list')
+  }
   const escape = (value) => value.replace(/[&<>"'\r]/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;', '\r': '&#13;' })[char])
   const xml = '<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><array>' +
     files.map((file) => '<string>' + escape(file) + '</string>').join('') + '</array></plist>'
-  clipboard.writeBuffer('NSFilenamesPboardType', Buffer.from(xml, 'utf8'))
+  const data = Buffer.from(xml, 'utf8')
+  clipboard.writeBuffer('NSFilenamesPboardType', data)
+  assert.equal(clipboard.readBuffer('NSFilenamesPboardType').equals(data), true, 'Native file-list write was not accepted')
 }
 
 function readJXAClipboard() {
@@ -167,6 +172,14 @@ app.whenReady().then(async () => {
           assert.deepEqual(normalize(process.platform === 'darwin' ? clipboard.legacy : clipboard.urls), normalize(expected), 'Independent native file-list readback before JXA')
         }
         return { ...clipboard, repetitions }
+      })
+    }
+    if (process.platform === 'darwin') {
+      await record(`invalid-xml-negative-${label}`, () => {
+        const before = clipboard.readBuffer('NSFilenamesPboardType')
+        assert.throws(() => writeClipboard([path.join(root, 'bad\u0001.txt')]), /Filename cannot be represented/)
+        assert.equal(clipboard.readBuffer('NSFilenamesPboardType').equals(before), true)
+        return { rejected: true, previousClipboardPreserved: true }
       })
     }
     await record(`path-text-negative-${label}`, () => {
