@@ -72,7 +72,7 @@ foreach ($item in $paths) { [void]$files.Add($item) }
 `, files)
     return
   }
-  const escape = (value) => value.replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;' })[char])
+  const escape = (value) => value.replace(/[&<>"'\r]/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;', '\r': '&#13;' })[char])
   const xml = '<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><array>' +
     files.map((file) => '<string>' + escape(file) + '</string>').join('') + '</array></plist>'
   clipboard.writeBuffer('NSFilenamesPboardType', Buffer.from(xml, 'utf8'))
@@ -132,7 +132,7 @@ app.whenReady().then(async () => {
   for (const [label, base] of [['temp', os.tmpdir()], ['home', os.homedir()]]) {
     const root = fs.realpathSync.native(fs.mkdtempSync(path.join(base, 'native-probe-')))
     roots.push(root)
-    const files = ['中文 文件 甲', '中文 文件 乙'].map((name) => makeFile(root, name))
+    const files = ['中文 文件 甲', process.platform === 'darwin' ? '中文 文件 乙 & <> "\'\r' : '中文 文件 乙'].map((name) => makeFile(root, name))
     if (process.platform === 'darwin') {
       await record(`swift-native-control-${label}`, (entry) => {
         const writer = swift('write', files)
