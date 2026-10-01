@@ -14,7 +14,10 @@ copy, cancellation, real Electron recycling, original-path recycle-bin SHA-256
 readback and persisted missing-asset status. Each Sharp differential runs in a
 fresh Electron process: no thumbnails, default filepath cache, buffer input,
 zero file cache and disabled cache. The unchanged Windows filepath case must
-reproduce the exact native failure; all four controls must successfully recycle.
+reproduce the exact native failure. Windows `files: 0` is also a strict negative
+control: the first JPEG experiment proved it still aborts both real trash calls,
+even though the tracked file count is zero. No-thumbnail, Buffer and disabled-cache
+controls must successfully recycle; `cache(false)` is the selected Windows fix.
 
 65-file menu tests cover canonical path association, first-page sort, replacing
 selection on right-click, removing only a record while preserving all files,

@@ -16,7 +16,10 @@ if (process.env.CI && !native)
   throw new Error("Native evidence requires Windows or macOS");
 
 async function launch(mode, count = 2, canonical = true) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "native-ui-"));
+  const temporaryRoot = fs.mkdtempSync(path.join(os.tmpdir(), "native-ui-"));
+  const root = canonical
+    ? fs.realpathSync.native(temporaryRoot)
+    : temporaryRoot;
   let app;
   try {
     app = await electron.launch({
@@ -44,7 +47,7 @@ async function launch(mode, count = 2, canonical = true) {
       fs.rmSync(root, {
         recursive: true,
         force: true,
-        maxRetries: 3,
+        maxRetries: 5,
         retryDelay: 100,
       });
     }
@@ -86,6 +89,7 @@ async function captureAndClose(session, testInfo) {
             Buffer.from(
               `
 $ErrorActionPreference='Stop'
+$ProgressPreference='SilentlyContinue'
 $root=$env:NATIVE_UI_ROOT.TrimEnd('\\')
 foreach($window in @((New-Object -ComObject Shell.Application).Windows())) {
   if(([string]$window.LocationURL).StartsWith('file:')) {
@@ -114,7 +118,7 @@ foreach($window in @((New-Object -ComObject Shell.Application).Windows())) {
         fs.rmSync(root, {
           recursive: true,
           force: true,
-          maxRetries: 3,
+          maxRetries: 5,
           retryDelay: 100,
         });
       }
@@ -213,8 +217,11 @@ for (const mode of ["baseline", "filepath", "buffer", "files0", "off"]) {
           .filter((event) => event.state === "started")
           .map((event) => event.path),
       ).toEqual(files);
-      // The unchanged filepath case must reproduce the original Windows failure.
-      if (process.platform === "win32" && mode === "filepath") {
+      // Both default caching and files:0 retain the JPEG lock; only off is the selected fix.
+      if (
+        process.platform === "win32" &&
+        ["filepath", "files0"].includes(mode)
+      ) {
         expect(
           final.events.filter((event) => event.state === "failed"),
         ).toEqual(
