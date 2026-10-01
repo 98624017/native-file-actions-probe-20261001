@@ -41,7 +41,8 @@ function swift(mode, file) {
 function recycledHashes(file) {
   return JSON.parse(powershell(`
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
-$original = @($env:NATIVE_PROBE_FILES | ConvertFrom-Json)[0]
+[string[]]$paths = ConvertFrom-Json -InputObject $env:NATIVE_PROBE_FILES
+$original = $paths[0]
 $name = [IO.Path]::GetFileName($original)
 $stem = [IO.Path]::GetFileNameWithoutExtension($original)
 $directory = [IO.Path]::GetDirectoryName($original)
@@ -50,7 +51,12 @@ $matches = @($bin.Items() | Where-Object {
   $_.ExtendedProperty('System.Recycle.DeletedFrom') -eq $directory -and
   ($_.Name -eq $name -or $_.Name -eq $stem)
 })
-$hashes = @($matches | ForEach-Object { (Get-FileHash -LiteralPath $_.Path -Algorithm SHA256).Hash.ToLowerInvariant() })
+$hashes = @(foreach ($item in $matches) {
+  $stream = [IO.File]::OpenRead($item.Path)
+  $sha = [Security.Cryptography.SHA256]::Create()
+  try { [BitConverter]::ToString($sha.ComputeHash($stream)).Replace('-', '').ToLowerInvariant() }
+  finally { $sha.Dispose(); $stream.Dispose() }
+})
 ConvertTo-Json -Compress -InputObject $hashes
 `, [file]))
 }
@@ -60,18 +66,19 @@ function writeClipboard(files) {
     powershell(`
 Add-Type -AssemblyName System.Windows.Forms
 $files = New-Object System.Collections.Specialized.StringCollection
-foreach ($item in @($env:NATIVE_PROBE_FILES | ConvertFrom-Json)) { [void]$files.Add([string]$item) }
+[string[]]$paths = ConvertFrom-Json -InputObject $env:NATIVE_PROBE_FILES
+foreach ($item in $paths) { [void]$files.Add($item) }
 [System.Windows.Forms.Clipboard]::SetFileDropList($files)
 `, files)
     return
   }
   execFileSync('/usr/bin/osascript', ['-e', `
 on run argv
-  set files to {}
-  repeat with itemPath in argv
-    set end of files to (POSIX file itemPath as alias)
+  set selectedFiles to {}
+  repeat with selectedPath in argv
+    set end of selectedFiles to (POSIX file selectedPath as alias)
   end repeat
-  set the clipboard to files
+  set the clipboard to selectedFiles
 end run
 `, ...files], { encoding: 'utf8', timeout: 15_000 })
 }
@@ -133,7 +140,8 @@ app.whenReady().then(async () => {
       if (process.platform === 'win32') {
         powershell(`
 Add-Type -AssemblyName System.Windows.Forms
-[System.Windows.Forms.Clipboard]::SetText(@($env:NATIVE_PROBE_FILES | ConvertFrom-Json)[0])
+[string[]]$paths = ConvertFrom-Json -InputObject $env:NATIVE_PROBE_FILES
+[System.Windows.Forms.Clipboard]::SetText($paths[0])
 if ([System.Windows.Forms.Clipboard]::ContainsFileDropList()) { throw 'Path text is not a FileDrop list' }
 `, [files[0]])
       } else {
@@ -160,7 +168,8 @@ if ([System.Windows.Forms.Clipboard]::ContainsFileDropList()) { throw 'Path text
       }
       powershell(`
 Add-Type -AssemblyName Microsoft.VisualBasic
-$file = @($env:NATIVE_PROBE_FILES | ConvertFrom-Json)[0]
+[string[]]$paths = ConvertFrom-Json -InputObject $env:NATIVE_PROBE_FILES
+$file = $paths[0]
 [Microsoft.VisualBasic.FileIO.FileSystem]::DeleteFile($file,
   [Microsoft.VisualBasic.FileIO.UIOption]::OnlyErrorDialogs,
   [Microsoft.VisualBasic.FileIO.RecycleOption]::SendToRecycleBin,
@@ -187,7 +196,8 @@ $file = @($env:NATIVE_PROBE_FILES | ConvertFrom-Json)[0]
         result.trashHashes = recycledHashes(electronFile)
         assert.deepEqual(result.trashHashes, [expectedHash])
       }
-      if (process.platform === 'darwin' && macDestinationDirectory) {
+      if (process.platform === 'darwin') {
+        assert.ok(macDestinationDirectory, 'Native recycle did not report a verified destination directory')
         const destination = path.join(macDestinationDirectory, path.basename(electronFile))
         result.destination = destination
         try {
@@ -213,7 +223,11 @@ const options = $.NSDictionary.dictionary
 const urls = board.readObjectsForClassesOptions(classes, options)
 if (urls.isNil()) throw new Error('Native NSURL reader returned nil')
 const result = []
-for (let i = 0; i < urls.count; i++) result.push(ObjC.unwrap(urls.objectAtIndex(i).path))
+for (let i = 0; i < urls.count; i++) {
+  const file = urls.objectAtIndex(i)
+  if (!file.isFileURL) throw new Error('Non-file URL on the pasteboard')
+  result.push(ObjC.unwrap(file.path))
+}
 JSON.stringify(result)
 `], { encoding: 'utf8', timeout: 15_000 })
         const actual = JSON.parse(output)

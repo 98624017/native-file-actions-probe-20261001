@@ -51,11 +51,11 @@ do {
         writer.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
         writer.arguments = ["-e", """
         on run argv
-          set files to {}
-          repeat with itemPath in argv
-            set end of files to (POSIX file itemPath as alias)
+          set selectedFiles to {}
+          repeat with selectedPath in argv
+            set end of selectedFiles to (POSIX file selectedPath as alias)
           end repeat
-          set the clipboard to files
+          set the clipboard to selectedFiles
         end run
         """] + urls.map { $0.path }
         try writer.run()
