@@ -1,4 +1,4 @@
-const { app, BrowserWindow, shell } = require('electron')
+const { app, BrowserWindow, clipboard, shell } = require('electron')
 const { execFileSync } = require('node:child_process')
 const { createHash } = require('node:crypto')
 const fs = require('node:fs')
@@ -72,23 +72,10 @@ foreach ($item in $paths) { [void]$files.Add($item) }
 `, files)
     return
   }
-  execFileSync('/usr/bin/osascript', ['-l', 'JavaScript', '-e', `
-ObjC.import('AppKit')
-function run(argv) {
-  const files = $.NSMutableArray.array
-  for (const filePath of argv) {
-    const item = $.NSPasteboardItem.alloc.init
-    const url = $.NSURL.fileURLWithPath($(filePath))
-    if (!item.setStringForType(url.absoluteString, $('public.file-url'))) throw new Error('Native file URL serialization failed')
-    files.addObject(item)
-  }
-  const board = $.NSPasteboard.generalPasteboard
-  board.clearContents
-  if (!board.writeObjects(files)) throw new Error('Native file clipboard write failed')
-  if (Number(board.pasteboardItems.count) !== argv.length) throw new Error('Native clipboard item count mismatch')
-  return 'success'
-}
-`, ...files], { encoding: 'utf8', timeout: 15_000 })
+  const escape = (value) => value.replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;' })[char])
+  const xml = '<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><array>' +
+    files.map((file) => '<string>' + escape(file) + '</string>').join('') + '</array></plist>'
+  clipboard.writeBuffer('NSFilenamesPboardType', Buffer.from(xml, 'utf8'))
 }
 
 function readJXAClipboard() {
@@ -96,16 +83,10 @@ function readJXAClipboard() {
 ObjC.import('AppKit')
 const board = $.NSPasteboard.generalPasteboard
 const types = ObjC.deepUnwrap(board.types)
-const classes = $.NSArray.arrayWithObject($.NSClassFromString('NSURL'))
-const urls = board.readObjectsForClassesOptions(classes, $.NSDictionary.dictionary)
-if (urls.isNil()) throw new Error('Native NSURL reader returned nil')
-const result = []
-for (let i = 0; i < urls.count; i++) {
-  const file = urls.objectAtIndex(i)
-  if (!file.isFileURL) throw new Error('Non-file URL on the pasteboard')
-  result.push(ObjC.unwrap(file.path))
-}
-JSON.stringify({ urls: result, types, nativeFileType: types.includes('public.file-url') })
+const files = board.propertyListForType($('NSFilenamesPboardType'))
+const result = files.isNil() ? [] : ObjC.deepUnwrap(files)
+if (!Array.isArray(result) || !result.every(path => typeof path === 'string')) throw new Error('Invalid native file list')
+JSON.stringify({ urls: result, types, nativeFileType: types.includes('NSFilenamesPboardType') })
 `], { encoding: 'utf8', timeout: 15_000 }))
 }
 
@@ -181,9 +162,9 @@ app.whenReady().then(async () => {
             assert.equal(clipboard.nativeFileType, true)
             assert.equal(clipboard.jxa.nativeFileType, true)
             assert.deepEqual(normalize(clipboard.jxa.urls), normalize(expected), 'JXA reads clipboard candidate')
-            assert.deepEqual(normalize(after.urls), normalize(expected), 'Swift reads candidate after JXA')
+            assert.deepEqual(normalize(after.legacy), normalize(expected), 'Swift reads candidate after JXA')
           }
-          assert.deepEqual(normalize(clipboard.urls), normalize(expected), 'Independent native readback before JXA')
+          assert.deepEqual(normalize(process.platform === 'darwin' ? clipboard.legacy : clipboard.urls), normalize(expected), 'Independent native file-list readback before JXA')
         }
         return { ...clipboard, repetitions }
       })
