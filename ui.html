@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="en">
+  <meta charset="utf-8" />
+  <title>Synthetic History native actions</title>
+  <style>
+    body {
+      font: 14px sans-serif;
+      margin: 16px;
+    }
+    #items {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 8px;
+    }
+    [data-item] {
+      border: 1px solid #999;
+      padding: 8px;
+      cursor: pointer;
+      overflow-wrap: anywhere;
+    }
+    [aria-selected="true"] {
+      outline: 3px solid #2463ce;
+    }
+    [data-item] img {
+      width: 120px;
+      height: 80px;
+      object-fit: contain;
+      display: block;
+    }
+    dialog {
+      max-width: 800px;
+    }
+    #preview-image {
+      max-width: 700px;
+      max-height: 500px;
+    }
+    #menu {
+      position: fixed;
+      z-index: 10;
+      background: white;
+      border: 1px solid #555;
+      padding: 8px;
+    }
+    #menu button {
+      display: block;
+      margin: 4px;
+    }
+  </style>
+  <h1>Synthetic History</h1>
+  <p id="count"></p>
+  <p id="selection"></p>
+  <button id="refresh">Refresh</button
+  ><button id="more">Load more</button>
+  <p role="status" id="status"></p>
+  <main id="items"></main>
+  <div role="menu" id="menu" hidden></div>
+  <dialog id="preview" aria-label="Original preview">
+    <img id="preview-image" alt="Original image" /><button id="current">
+      Current file actions
+    </button>
+    <button id="close-preview">Close preview</button>
+  </dialog>
+  <dialog role="alertdialog" id="confirmation" aria-label="Confirm action">
+    <p id="warning"></p>
+    <button id="cancel">Cancel</button><button id="confirm">Confirm</button>
+  </dialog>
+  <script>
+    const $ = (id) => document.getElementById(id);
+    let selected = new Set();
+    let items = [];
+    let limit = 48;
+    let current;
+    let pending;
+    const updateSelection = () => {
+      $("selection").textContent = `Selected ${selected.size}`;
+      document
+        .querySelectorAll("[data-item]")
+        .forEach((element) =>
+          element.setAttribute(
+            "aria-selected",
+            String(selected.has(element.dataset.path)),
+          ),
+        );
+    };
+    async function refresh() {
+      $("items").dataset.ready = "false";
+      const result = await window.api.list(limit);
+      items = result.items;
+      selected = new Set(
+        [...selected].filter((file) =>
+          items.some((item) => item.path === file),
+        ),
+      );
+      $("count").textContent = `Loaded ${items.length} / ${result.total}`;
+      $("items").replaceChildren();
+      for (const item of items) {
+        const card = document.createElement("div");
+        card.dataset.item = "";
+        card.dataset.path = item.path;
+        card.setAttribute("role", "option");
+        card.setAttribute("aria-label", item.name);
+        const image = document.createElement("img");
+        image.alt = item.name;
+        card.append(image, document.createTextNode(item.name));
+        $("items").append(card);
+        const thumbnail = await window.api.thumbnail(item.path);
+        if (thumbnail) image.src = thumbnail;
+        card.onclick = (event) => {
+          if (event.ctrlKey || event.metaKey) {
+            if (selected.has(item.path)) selected.delete(item.path);
+            else selected.add(item.path);
+          } else selected = new Set([item.path]);
+          updateSelection();
+        };
+        card.oncontextmenu = (event) => {
+          event.preventDefault();
+          if (!selected.has(item.path)) selected = new Set([item.path]);
+          updateSelection();
+          showMenu([...selected], item.path, event.clientX, event.clientY);
+        };
+      }
+      updateSelection();
+      $("items").dataset.ready = "true";
+    }
+    function showMenu(targets, file, x = 100, y = 100, preview = false) {
+      $("menu").replaceChildren();
+      const add = (name, action) => {
+        const button = document.createElement("button");
+        button.setAttribute("role", "menuitem");
+        button.textContent = name;
+        button.onclick = async () => {
+          $("menu").hidden = true;
+          await action();
+        };
+        $("menu").append(button);
+      };
+      add(`Copy ${targets.length} files`, () =>
+        window.api.action("copy", targets),
+      );
+      if (!preview)
+        add("Preview", () => {
+          current = file;
+          $("preview-image").src =
+            "asset://local/image?path=" + encodeURIComponent(file);
+          $("preview").showModal();
+        });
+      for (const [name, action] of [
+        ["Trash", "trash"],
+        ["Remove records", "remove-record"],
+      ]) {
+        add(name, () => {
+          pending = { targets, action };
+          $("warning").textContent =
+            action === "trash"
+              ? "Move files to system recycle bin"
+              : "Keep physical files";
+          $("confirmation").showModal();
+        });
+      }
+      add("Reveal", () => window.api.action("reveal", [file]));
+      add("Open", () => window.api.action("open", [file]));
+      // Dialogs live in the browser top layer; place their menus inside that layer.
+      (preview ? $("preview") : document.body).append($("menu"));
+      $("menu").style.left = Math.min(x, 700) + "px";
+      $("menu").style.top = Math.min(y, 500) + "px";
+      $("menu").hidden = false;
+    }
+    $("current").onclick = () => showMenu([current], current, 150, 150, true);
+    $("close-preview").onclick = () => {
+      $("preview").close();
+      $("preview-image").removeAttribute("src");
+    };
+    $("cancel").onclick = () => {
+      $("confirmation").close();
+      pending = null;
+    };
+    $("confirm").onclick = async () => {
+      const result = await window.api.action(pending.action, pending.targets);
+      $("status").textContent =
+        `Succeeded ${result.succeeded.length}, failed ${result.failed.length}: ` +
+        result.failed.map((item) => item.message).join("; ");
+      $("confirmation").close();
+      pending = null;
+      await refresh();
+    };
+    $("refresh").onclick = refresh;
+    $("more").onclick = () => {
+      limit = 65;
+      return refresh();
+    };
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") $("menu").hidden = true;
+    });
+    refresh().catch((error) => {
+      $("status").textContent = error.message;
+      throw error;
+    });
+  </script>
+</html>

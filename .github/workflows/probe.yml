@@ -23,7 +23,7 @@ jobs:
       matrix:
         platform: ${{ fromJSON(inputs.platform == 'all' && '["windows","macos"]' || format('["{0}"]', inputs.platform)) }}
     runs-on: ${{ matrix.platform == 'windows' && 'windows-latest' || 'macos-latest' }}
-    timeout-minutes: 5
+    timeout-minutes: 8
     steps:
       - uses: actions/checkout@v6
 
@@ -38,13 +38,25 @@ jobs:
           swiftc mac-reader.swift -o mac-reader
           ./mac-reader self-check
 
-      - name: Install Electron only
+      - name: Install pinned native and test dependencies
         timeout-minutes: 2
         run: npm ci --no-audit --no-fund
+
+      - name: Check scripts and test discovery before native execution
+        id: preflight
+        timeout-minutes: 1
+        run: |
+          npm run check
+          npx --no-install playwright test --list
 
       - name: Probe native clipboard and recycling
         timeout-minutes: 2
         run: npx --no-install electron .
+
+      - name: Full JPEG UI, native actions and Sharp cache differential
+        if: ${{ !cancelled() && steps.preflight.outcome == 'success' }}
+        timeout-minutes: 3
+        run: npm test
 
       - name: Upload findings
         if: ${{ always() }}

@@ -1,45 +1,82 @@
-const { app, BrowserWindow, clipboard, shell } = require('electron')
-const { execFileSync } = require('node:child_process')
-const { createHash } = require('node:crypto')
-const fs = require('node:fs')
-const os = require('node:os')
-const path = require('node:path')
-const assert = require('node:assert/strict')
+const { app, BrowserWindow, clipboard, shell } = require("electron");
+const { execFileSync } = require("node:child_process");
+const { createHash } = require("node:crypto");
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
+const assert = require("node:assert/strict");
 
-const report = { platform: process.platform, arch: process.arch, versions: process.versions, cases: [] }
-const roots = []
-const hash = (file) => createHash('sha256').update(fs.readFileSync(file)).digest('hex')
-const normalize = (files) => files.map((file) => fs.realpathSync.native(file)).sort()
+const report = {
+  platform: process.platform,
+  arch: process.arch,
+  versions: process.versions,
+  cases: [],
+};
+const roots = [];
+const hash = (file) =>
+  createHash("sha256").update(fs.readFileSync(file)).digest("hex");
+const normalize = (files) =>
+  files.map((file) => fs.realpathSync.native(file)).sort();
 
 function saveReport() {
-  fs.mkdirSync('artifacts', { recursive: true })
-  fs.writeFileSync('artifacts/native-report.json', JSON.stringify(report, null, 2), 'utf8')
-  console.log(JSON.stringify(report, null, 2))
+  fs.mkdirSync("artifacts", { recursive: true });
+  fs.writeFileSync(
+    "artifacts/native-report.json",
+    JSON.stringify(report, null, 2),
+    "utf8",
+  );
+  console.log(JSON.stringify(report, null, 2));
 }
-const deadline = setTimeout(() => {
-  report.fatalError = { message: 'Native probe exceeded its 90-second deadline' }
-  saveReport()
-  app.exit(2)
-}, 90_000)
+const deadline =
+  require.main === module
+    ? setTimeout(() => {
+        report.fatalError = {
+          message: "Native probe exceeded its 90-second deadline",
+        };
+        saveReport();
+        app.exit(2);
+      }, 90_000)
+    : null;
 
 function powershell(source, files) {
-  return execFileSync('powershell.exe', [
-    '-NoProfile', '-NonInteractive', '-Sta', '-EncodedCommand',
-    Buffer.from("$ProgressPreference='SilentlyContinue'\n$ErrorActionPreference='Stop'\n" + source, 'utf16le').toString('base64')
-  ], {
-    encoding: 'utf8', timeout: 15_000,
-    env: { ...process.env, NATIVE_PROBE_FILES: JSON.stringify(files) }
-  }).trim()
+  return execFileSync(
+    "powershell.exe",
+    [
+      "-NoProfile",
+      "-NonInteractive",
+      "-Sta",
+      "-EncodedCommand",
+      Buffer.from(
+        "$ProgressPreference='SilentlyContinue'\n$ErrorActionPreference='Stop'\n" +
+          source,
+        "utf16le",
+      ).toString("base64"),
+    ],
+    {
+      encoding: "utf8",
+      timeout: 15_000,
+      env: { ...process.env, NATIVE_PROBE_FILES: JSON.stringify(files) },
+    },
+  ).trim();
 }
 
 function swift(mode, file) {
-  return JSON.parse(execFileSync(path.resolve('mac-reader'), [mode, ...(Array.isArray(file) ? file : file ? [file] : [])], {
-    encoding: 'utf8', timeout: 15_000
-  }))
+  return JSON.parse(
+    execFileSync(
+      path.resolve("mac-reader"),
+      [mode, ...(Array.isArray(file) ? file : file ? [file] : [])],
+      {
+        encoding: "utf8",
+        timeout: 15_000,
+      },
+    ),
+  );
 }
 
 function recycledHashes(file) {
-  return JSON.parse(powershell(`
+  return JSON.parse(
+    powershell(
+      `
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 [string[]]$paths = ConvertFrom-Json -InputObject $env:NATIVE_PROBE_FILES
 $original = $paths[0]
@@ -58,33 +95,72 @@ $hashes = @(foreach ($item in $matches) {
   finally { $sha.Dispose(); $stream.Dispose() }
 })
 ConvertTo-Json -Compress -InputObject $hashes
-`, [file]))
+`,
+      [file],
+    ),
+  );
 }
 
 function writeClipboard(files) {
-  if (process.platform === 'win32') {
-    powershell(`
+  if (process.platform === "win32") {
+    powershell(
+      `
 Add-Type -AssemblyName System.Windows.Forms
 $files = New-Object System.Collections.Specialized.StringCollection
 [string[]]$paths = ConvertFrom-Json -InputObject $env:NATIVE_PROBE_FILES
 foreach ($item in $paths) { [void]$files.Add($item) }
 [System.Windows.Forms.Clipboard]::SetFileDropList($files)
-`, files)
-    return
+`,
+      files,
+    );
+    return;
   }
-  if (files.some((file) => /[\u0000-\u0008\u000b\u000c\u000e-\u001f\ufffe\uffff]/u.test(file) || Buffer.from(file, 'utf8').toString('utf8') !== file)) {
-    throw new Error('Filename cannot be represented in the native XML file list')
+  if (
+    files.some(
+      (file) =>
+        /[\u0000-\u0008\u000b\u000c\u000e-\u001f\ufffe\uffff]/u.test(file) ||
+        Buffer.from(file, "utf8").toString("utf8") !== file,
+    )
+  ) {
+    throw new Error(
+      "Filename cannot be represented in the native XML file list",
+    );
   }
-  const escape = (value) => value.replace(/[&<>"'\r]/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;', '\r': '&#13;' })[char])
-  const xml = '<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><array>' +
-    files.map((file) => '<string>' + escape(file) + '</string>').join('') + '</array></plist>'
-  const data = Buffer.from(xml, 'utf8')
-  clipboard.writeBuffer('NSFilenamesPboardType', data)
-  assert.equal(clipboard.readBuffer('NSFilenamesPboardType').equals(data), true, 'Native file-list write was not accepted')
+  const escape = (value) =>
+    value.replace(
+      /[&<>"'\r]/g,
+      (char) =>
+        ({
+          "&": "&amp;",
+          "<": "&lt;",
+          ">": "&gt;",
+          '"': "&quot;",
+          "'": "&apos;",
+          "\r": "&#13;",
+        })[char],
+    );
+  const xml =
+    '<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><array>' +
+    files.map((file) => "<string>" + escape(file) + "</string>").join("") +
+    "</array></plist>";
+  const data = Buffer.from(xml, "utf8");
+  clipboard.writeBuffer("NSFilenamesPboardType", data);
+  assert.equal(
+    clipboard.readBuffer("NSFilenamesPboardType").equals(data),
+    true,
+    "Native file-list write was not accepted",
+  );
 }
 
 function readJXAClipboard() {
-  return JSON.parse(execFileSync('/usr/bin/osascript', ['-l', 'JavaScript', '-e', `
+  return JSON.parse(
+    execFileSync(
+      "/usr/bin/osascript",
+      [
+        "-l",
+        "JavaScript",
+        "-e",
+        `
 ObjC.import('AppKit')
 const board = $.NSPasteboard.generalPasteboard
 const types = ObjC.deepUnwrap(board.types)
@@ -92,130 +168,214 @@ const files = board.propertyListForType($('NSFilenamesPboardType'))
 const result = files.isNil() ? [] : ObjC.deepUnwrap(files)
 if (!Array.isArray(result) || !result.every(path => typeof path === 'string')) throw new Error('Invalid native file list')
 JSON.stringify({ urls: result, types, nativeFileType: types.includes('NSFilenamesPboardType') })
-`], { encoding: 'utf8', timeout: 15_000 }))
+`,
+      ],
+      { encoding: "utf8", timeout: 15_000 },
+    ),
+  );
 }
 
 function readClipboard() {
-  if (process.platform === 'win32') {
-    return { urls: JSON.parse(powershell(`
+  if (process.platform === "win32") {
+    return {
+      urls: JSON.parse(
+        powershell(
+          `
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 Add-Type -AssemblyName System.Windows.Forms
 if (-not [System.Windows.Forms.Clipboard]::ContainsFileDropList()) { throw 'No FileDrop list' }
 ConvertTo-Json -Compress -InputObject @([System.Windows.Forms.Clipboard]::GetFileDropList())
-`, [])) }
+`,
+          [],
+        ),
+      ),
+    };
   }
-  return swift('read')
+  return swift("read");
 }
 
 async function record(name, operation) {
-  const started = Date.now()
-  const entry = { name, status: 'running' }
-  report.cases.push(entry)
+  const started = Date.now();
+  const entry = { name, status: "running" };
+  report.cases.push(entry);
   try {
-    entry.result = await operation(entry)
-    entry.status = 'passed'
+    entry.result = await operation(entry);
+    entry.status = "passed";
   } catch (error) {
-    entry.status = 'failed'
-    entry.error = { name: error.name, message: error.message, code: error.code ?? null,
-      stack: error.stack, stdout: String(error.stdout ?? ''), stderr: String(error.stderr ?? '') }
+    entry.status = "failed";
+    entry.error = {
+      name: error.name,
+      message: error.message,
+      code: error.code ?? null,
+      stack: error.stack,
+      stdout: String(error.stdout ?? ""),
+      stderr: String(error.stderr ?? ""),
+    };
   } finally {
-    entry.elapsedMs = Date.now() - started
+    entry.elapsedMs = Date.now() - started;
   }
 }
 
 function makeFile(root, name) {
-  const uniqueName = name + ' ' + path.basename(root)
-  const file = path.join(root, uniqueName + '.txt')
-  fs.writeFileSync(file, 'synthetic file bytes: ' + uniqueName, 'utf8')
-  return fs.realpathSync.native(file)
+  const uniqueName = name + " " + path.basename(root);
+  const file = path.join(root, uniqueName + ".txt");
+  fs.writeFileSync(file, "synthetic file bytes: " + uniqueName, "utf8");
+  return fs.realpathSync.native(file);
 }
 
-app.commandLine.appendSwitch('disable-gpu')
-app.whenReady().then(async () => {
-  const window = new BrowserWindow({ width: 320, height: 200 })
-  await window.loadURL('data:text/html,<title>Native probe</title><p>Synthetic file probe</p>')
-  for (const [label, base] of [['temp', os.tmpdir()], ['home', os.homedir()]]) {
-    const root = fs.realpathSync.native(fs.mkdtempSync(path.join(base, 'native-probe-')))
-    roots.push(root)
-    const files = ['中文 文件 甲', process.platform === 'darwin' ? '中文 文件 乙 & <> "\'\r' : '中文 文件 乙'].map((name) => makeFile(root, name))
-    if (process.platform === 'darwin') {
-      await record(`swift-native-control-${label}`, (entry) => {
-        const writer = swift('write', files)
-        const reader = readClipboard()
-        const jxa = readJXAClipboard()
-        const after = readClipboard()
-        entry.observations = { writer, reader, jxa, after }
-        assert.equal(reader.nativeFileType, true)
-        assert.deepEqual(normalize(reader.urls), normalize(files), 'Swift control before JXA')
-        assert.deepEqual(normalize(jxa.urls), normalize(files), 'JXA reads Swift control')
-        assert.deepEqual(normalize(after.urls), normalize(files), 'Swift control after JXA')
-        return entry.observations
-      })
-    }
-    for (const count of [2, 1]) {
-      await record(`clipboard-${label}-${count}`, (entry) => {
-        const expected = files.slice(0, count)
-        let clipboard
-        const repetitions = process.platform === 'darwin' ? 10 : 1
-        for (let iteration = 0; iteration < repetitions; iteration++) {
-          writeClipboard(expected)
-          clipboard = readClipboard()
-          if (process.platform === 'darwin') {
-            clipboard.jxa = readJXAClipboard()
-            const after = readClipboard()
-            entry.observations = { iteration, expected, reader: clipboard, after }
-            assert.equal(clipboard.nativeFileType, true)
-            assert.equal(clipboard.jxa.nativeFileType, true)
-            assert.deepEqual(normalize(clipboard.jxa.urls), normalize(expected), 'JXA reads clipboard candidate')
-            assert.deepEqual(normalize(after.legacy), normalize(expected), 'Swift reads candidate after JXA')
-          }
-          assert.deepEqual(normalize(process.platform === 'darwin' ? clipboard.legacy : clipboard.urls), normalize(expected), 'Independent native file-list readback before JXA')
+if (require.main === module) {
+  app.commandLine.appendSwitch("disable-gpu");
+  app
+    .whenReady()
+    .then(async () => {
+      const window = new BrowserWindow({ width: 320, height: 200 });
+      await window.loadURL(
+        "data:text/html,<title>Native probe</title><p>Synthetic file probe</p>",
+      );
+      for (const [label, base] of [
+        ["temp", os.tmpdir()],
+        ["home", os.homedir()],
+      ]) {
+        const root = fs.realpathSync.native(
+          fs.mkdtempSync(path.join(base, "native-probe-")),
+        );
+        roots.push(root);
+        const files = [
+          "中文 文件 甲",
+          process.platform === "darwin"
+            ? "中文 文件 乙 & <> \"'\r"
+            : "中文 文件 乙",
+        ].map((name) => makeFile(root, name));
+        if (process.platform === "darwin") {
+          await record(`swift-native-control-${label}`, (entry) => {
+            const writer = swift("write", files);
+            const reader = readClipboard();
+            const jxa = readJXAClipboard();
+            const after = readClipboard();
+            entry.observations = { writer, reader, jxa, after };
+            assert.equal(reader.nativeFileType, true);
+            assert.deepEqual(
+              normalize(reader.urls),
+              normalize(files),
+              "Swift control before JXA",
+            );
+            assert.deepEqual(
+              normalize(jxa.urls),
+              normalize(files),
+              "JXA reads Swift control",
+            );
+            assert.deepEqual(
+              normalize(after.urls),
+              normalize(files),
+              "Swift control after JXA",
+            );
+            return entry.observations;
+          });
         }
-        return { ...clipboard, repetitions }
-      })
-    }
-    if (process.platform === 'darwin') {
-      await record(`invalid-xml-negative-${label}`, () => {
-        const before = clipboard.readBuffer('NSFilenamesPboardType')
-        assert.throws(() => writeClipboard([path.join(root, 'bad\u0001.txt')]), /Filename cannot be represented/)
-        assert.equal(clipboard.readBuffer('NSFilenamesPboardType').equals(before), true)
-        return { rejected: true, previousClipboardPreserved: true }
-      })
-    }
-    await record(`path-text-negative-${label}`, () => {
-      if (process.platform === 'win32') {
-        powershell(`
+        for (const count of [2, 1]) {
+          await record(`clipboard-${label}-${count}`, (entry) => {
+            const expected = files.slice(0, count);
+            let clipboard;
+            const repetitions = process.platform === "darwin" ? 10 : 1;
+            for (let iteration = 0; iteration < repetitions; iteration++) {
+              writeClipboard(expected);
+              clipboard = readClipboard();
+              if (process.platform === "darwin") {
+                clipboard.jxa = readJXAClipboard();
+                const after = readClipboard();
+                entry.observations = {
+                  iteration,
+                  expected,
+                  reader: clipboard,
+                  after,
+                };
+                assert.equal(clipboard.nativeFileType, true);
+                assert.equal(clipboard.jxa.nativeFileType, true);
+                assert.deepEqual(
+                  normalize(clipboard.jxa.urls),
+                  normalize(expected),
+                  "JXA reads clipboard candidate",
+                );
+                assert.deepEqual(
+                  normalize(after.legacy),
+                  normalize(expected),
+                  "Swift reads candidate after JXA",
+                );
+              }
+              assert.deepEqual(
+                normalize(
+                  process.platform === "darwin"
+                    ? clipboard.legacy
+                    : clipboard.urls,
+                ),
+                normalize(expected),
+                "Independent native file-list readback before JXA",
+              );
+            }
+            return { ...clipboard, repetitions };
+          });
+        }
+        if (process.platform === "darwin") {
+          await record(`invalid-xml-negative-${label}`, () => {
+            const before = clipboard.readBuffer("NSFilenamesPboardType");
+            assert.throws(
+              () => writeClipboard([path.join(root, "bad\u0001.txt")]),
+              /Filename cannot be represented/,
+            );
+            assert.equal(
+              clipboard.readBuffer("NSFilenamesPboardType").equals(before),
+              true,
+            );
+            return { rejected: true, previousClipboardPreserved: true };
+          });
+        }
+        await record(`path-text-negative-${label}`, () => {
+          if (process.platform === "win32") {
+            powershell(
+              `
 Add-Type -AssemblyName System.Windows.Forms
 [string[]]$paths = ConvertFrom-Json -InputObject $env:NATIVE_PROBE_FILES
 [System.Windows.Forms.Clipboard]::SetText($paths[0])
 if ([System.Windows.Forms.Clipboard]::ContainsFileDropList()) { throw 'Path text is not a FileDrop list' }
-`, [files[0]])
-      } else {
-        execFileSync('/usr/bin/osascript', ['-e', 'on run argv\nset the clipboard to item 1 of argv\nend run', files[0]],
-          { encoding: 'utf8', timeout: 15_000 })
-        const clipboard = readClipboard()
-        assert.equal(clipboard.nativeFileType, false)
-        const jxa = readJXAClipboard()
-        assert.equal(jxa.nativeFileType, false)
-        assert.deepEqual(jxa.urls, [])
-        return { ...clipboard, jxa }
-      }
-      return { fileDropList: false }
-    })
+`,
+              [files[0]],
+            );
+          } else {
+            execFileSync(
+              "/usr/bin/osascript",
+              [
+                "-e",
+                "on run argv\nset the clipboard to item 1 of argv\nend run",
+                files[0],
+              ],
+              { encoding: "utf8", timeout: 15_000 },
+            );
+            const clipboard = readClipboard();
+            assert.equal(clipboard.nativeFileType, false);
+            const jxa = readJXAClipboard();
+            assert.equal(jxa.nativeFileType, false);
+            assert.deepEqual(jxa.urls, []);
+            return { ...clipboard, jxa };
+          }
+          return { fileDropList: false };
+        });
 
-    let macDestinationDirectory
-    const nativeFile = makeFile(root, '中文 native recycle')
-    const nativeHash = hash(nativeFile)
-    await record(`native-recycle-${label}`, () => {
-      if (process.platform === 'darwin') {
-        const result = swift('trash', nativeFile)
-        macDestinationDirectory = path.dirname(result.destination)
-        const digest = createHash('sha256').update(Buffer.from(result.bytesBase64, 'base64')).digest('hex')
-        assert.equal(digest, nativeHash)
-        assert.equal(fs.existsSync(nativeFile), false)
-        return result
-      }
-      powershell(`
+        let macDestinationDirectory;
+        const nativeFile = makeFile(root, "中文 native recycle");
+        const nativeHash = hash(nativeFile);
+        await record(`native-recycle-${label}`, () => {
+          if (process.platform === "darwin") {
+            const result = swift("trash", nativeFile);
+            macDestinationDirectory = path.dirname(result.destination);
+            const digest = createHash("sha256")
+              .update(Buffer.from(result.bytesBase64, "base64"))
+              .digest("hex");
+            assert.equal(digest, nativeHash);
+            assert.equal(fs.existsSync(nativeFile), false);
+            return result;
+          }
+          powershell(
+            `
 Add-Type -AssemblyName Microsoft.VisualBasic
 [string[]]$paths = ConvertFrom-Json -InputObject $env:NATIVE_PROBE_FILES
 $file = $paths[0]
@@ -223,57 +383,91 @@ $file = $paths[0]
   [Microsoft.VisualBasic.FileIO.UIOption]::OnlyErrorDialogs,
   [Microsoft.VisualBasic.FileIO.RecycleOption]::SendToRecycleBin,
   [Microsoft.VisualBasic.FileIO.UICancelOption]::ThrowException)
-`, [nativeFile])
-      assert.equal(fs.existsSync(nativeFile), false)
-      const hashes = recycledHashes(nativeFile)
-      assert.deepEqual(hashes, [nativeHash])
-      return { sourceExists: false, trashHashes: hashes }
-    })
+`,
+            [nativeFile],
+          );
+          assert.equal(fs.existsSync(nativeFile), false);
+          const hashes = recycledHashes(nativeFile);
+          assert.deepEqual(hashes, [nativeHash]);
+          return { sourceExists: false, trashHashes: hashes };
+        });
 
-    const electronFile = makeFile(root, '中文 electron recycle')
-    const expectedHash = hash(electronFile)
-    await record(`electron-recycle-${label}`, async () => {
-      try {
-        await shell.trashItem(electronFile)
-      } catch (error) {
-        error.message += '; sourceExists=' + fs.existsSync(electronFile)
-        throw error
+        const electronFile = makeFile(root, "中文 electron recycle");
+        const expectedHash = hash(electronFile);
+        await record(`electron-recycle-${label}`, async () => {
+          try {
+            await shell.trashItem(electronFile);
+          } catch (error) {
+            error.message += "; sourceExists=" + fs.existsSync(electronFile);
+            throw error;
+          }
+          assert.equal(fs.existsSync(electronFile), false);
+          const result = { sourceExists: false };
+          if (process.platform === "win32") {
+            result.trashHashes = recycledHashes(electronFile);
+            assert.deepEqual(result.trashHashes, [expectedHash]);
+          }
+          if (process.platform === "darwin") {
+            assert.ok(
+              macDestinationDirectory,
+              "Native recycle did not report a verified destination directory",
+            );
+            const destination = path.join(
+              macDestinationDirectory,
+              path.basename(electronFile),
+            );
+            result.destination = destination;
+            try {
+              result.trashHash = hash(destination);
+            } catch (error) {
+              result.readbackError = {
+                message: error.message,
+                code: error.code ?? null,
+              };
+              error.message +=
+                "; sourceAbsent=true; trashDestination=" + destination;
+              throw error;
+            }
+            assert.equal(result.trashHash, expectedHash);
+          }
+          return result;
+        });
       }
-      assert.equal(fs.existsSync(electronFile), false)
-      const result = { sourceExists: false }
-      if (process.platform === 'win32') {
-        result.trashHashes = recycledHashes(electronFile)
-        assert.deepEqual(result.trashHashes, [expectedHash])
-      }
-      if (process.platform === 'darwin') {
-        assert.ok(macDestinationDirectory, 'Native recycle did not report a verified destination directory')
-        const destination = path.join(macDestinationDirectory, path.basename(electronFile))
-        result.destination = destination
+      window.destroy();
+    })
+    .catch((error) => {
+      report.fatalError = { message: error.message, stack: error.stack };
+    })
+    .finally(() => {
+      clearTimeout(deadline);
+      for (const root of roots) {
         try {
-          result.trashHash = hash(destination)
+          fs.rmSync(root, { recursive: true, force: true });
         } catch (error) {
-          result.readbackError = { message: error.message, code: error.code ?? null }
-          error.message += '; sourceAbsent=true; trashDestination=' + destination
-          throw error
+          report.cleanupErrors ??= [];
+          report.cleanupErrors.push({
+            root,
+            message: error.message,
+            code: error.code ?? null,
+          });
         }
-        assert.equal(result.trashHash, expectedHash)
       }
-      return result
-    })
+      saveReport();
+      app.exit(
+        report.fatalError ||
+          report.cleanupErrors ||
+          report.cases.some((item) => item.status === "failed")
+          ? 1
+          : 0,
+      );
+    });
+}
 
-  }
-  window.destroy()
-}).catch((error) => {
-  report.fatalError = { message: error.message, stack: error.stack }
-}).finally(() => {
-  clearTimeout(deadline)
-  for (const root of roots) {
-    try { fs.rmSync(root, { recursive: true, force: true }) }
-    catch (error) {
-      report.cleanupErrors ??= []
-      report.cleanupErrors.push({ root, message: error.message, code: error.code ?? null })
-    }
-  }
-  saveReport()
-  app.exit(report.fatalError || report.cleanupErrors || report.cases.some((item) => item.status === 'failed') ? 1 : 0)
-})
+module.exports = {
+  hash,
+  normalize,
+  recycledHashes,
+  writeClipboard,
+  readClipboard,
+  readJXAClipboard,
+};
