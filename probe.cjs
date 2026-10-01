@@ -126,12 +126,12 @@ async function record(name, operation) {
   const entry = { name, status: 'running' }
   report.cases.push(entry)
   try {
-    entry.result = await operation()
+    entry.result = await operation(entry)
     entry.status = 'passed'
   } catch (error) {
     entry.status = 'failed'
     entry.error = { name: error.name, message: error.message, code: error.code ?? null,
-      stdout: String(error.stdout ?? ''), stderr: String(error.stderr ?? '') }
+      stack: error.stack, stdout: String(error.stdout ?? ''), stderr: String(error.stderr ?? '') }
   } finally {
     entry.elapsedMs = Date.now() - started
   }
@@ -153,29 +153,37 @@ app.whenReady().then(async () => {
     roots.push(root)
     const files = ['中文 文件 甲', '中文 文件 乙'].map((name) => makeFile(root, name))
     if (process.platform === 'darwin') {
-      await record(`swift-native-control-${label}`, () => {
+      await record(`swift-native-control-${label}`, (entry) => {
         const writer = swift('write', files)
         const reader = readClipboard()
+        const jxa = readJXAClipboard()
+        const after = readClipboard()
+        entry.observations = { writer, reader, jxa, after }
         assert.equal(reader.nativeFileType, true)
-        assert.deepEqual(normalize(reader.urls), normalize(files))
-        return { writer, reader }
+        assert.deepEqual(normalize(reader.urls), normalize(files), 'Swift control before JXA')
+        assert.deepEqual(normalize(jxa.urls), normalize(files), 'JXA reads Swift control')
+        assert.deepEqual(normalize(after.urls), normalize(files), 'Swift control after JXA')
+        return entry.observations
       })
     }
     for (const count of [2, 1]) {
-      await record(`clipboard-${label}-${count}`, () => {
+      await record(`clipboard-${label}-${count}`, (entry) => {
         const expected = files.slice(0, count)
         let clipboard
         const repetitions = process.platform === 'darwin' ? 10 : 1
         for (let iteration = 0; iteration < repetitions; iteration++) {
           writeClipboard(expected)
           clipboard = readClipboard()
-          assert.deepEqual(normalize(clipboard.urls), normalize(expected))
           if (process.platform === 'darwin') {
-            assert.equal(clipboard.nativeFileType, true)
             clipboard.jxa = readJXAClipboard()
+            const after = readClipboard()
+            entry.observations = { iteration, expected, reader: clipboard, after }
+            assert.equal(clipboard.nativeFileType, true)
             assert.equal(clipboard.jxa.nativeFileType, true)
-            assert.deepEqual(normalize(clipboard.jxa.urls), normalize(expected))
+            assert.deepEqual(normalize(clipboard.jxa.urls), normalize(expected), 'JXA reads clipboard candidate')
+            assert.deepEqual(normalize(after.urls), normalize(expected), 'Swift reads candidate after JXA')
           }
+          assert.deepEqual(normalize(clipboard.urls), normalize(expected), 'Independent native readback before JXA')
         }
         return { ...clipboard, repetitions }
       })
