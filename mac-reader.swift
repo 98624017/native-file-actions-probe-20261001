@@ -49,14 +49,16 @@ do {
         writer.standardOutput = writerOutput
         writer.standardError = writerError
         writer.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-        writer.arguments = ["-e", """
-        on run argv
-          set selectedFiles to {}
-          repeat with selectedPath in argv
-            set end of selectedFiles to (POSIX file selectedPath as alias)
-          end repeat
-          set the clipboard to selectedFiles
-        end run
+        writer.arguments = ["-l", "JavaScript", "-e", """
+        ObjC.import('AppKit')
+        function run(argv) {
+          const files = $.NSMutableArray.array
+          for (const filePath of argv) files.addObject($.NSURL.fileURLWithPath($(filePath)))
+          const board = $.NSPasteboard.generalPasteboard
+          board.clearContents
+          if (!board.writeObjects(files)) throw new Error('Native file clipboard write failed')
+          return 'success'
+        }
         """] + urls.map { $0.path }
         try writer.run()
         writer.waitUntilExit()
@@ -68,9 +70,7 @@ do {
         let report = readClipboard()
         let expected = urls.map { $0.resolvingSymlinksInPath().path }.sorted()
         let modern = (report["urls"] as? [String] ?? []).sorted()
-        let legacy = (report["legacy"] as? [String] ?? []).sorted()
-        guard report["nativeFileType"] as? Bool == true &&
-            (modern == expected || legacy == expected) else {
+        guard report["nativeFileType"] as? Bool == true && modern == expected else {
             failureContext = report
             throw NSError(domain: "NativeReader.RoundTrip", code: 1)
         }

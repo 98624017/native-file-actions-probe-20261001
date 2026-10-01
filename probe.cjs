@@ -72,15 +72,35 @@ foreach ($item in $paths) { [void]$files.Add($item) }
 `, files)
     return
   }
-  execFileSync('/usr/bin/osascript', ['-e', `
-on run argv
-  set selectedFiles to {}
-  repeat with selectedPath in argv
-    set end of selectedFiles to (POSIX file selectedPath as alias)
-  end repeat
-  set the clipboard to selectedFiles
-end run
+  execFileSync('/usr/bin/osascript', ['-l', 'JavaScript', '-e', `
+ObjC.import('AppKit')
+function run(argv) {
+  const files = $.NSMutableArray.array
+  for (const filePath of argv) files.addObject($.NSURL.fileURLWithPath($(filePath)))
+  const board = $.NSPasteboard.generalPasteboard
+  board.clearContents
+  if (!board.writeObjects(files)) throw new Error('Native file clipboard write failed')
+  return 'success'
+}
 `, ...files], { encoding: 'utf8', timeout: 15_000 })
+}
+
+function readJXAClipboard() {
+  return JSON.parse(execFileSync('/usr/bin/osascript', ['-l', 'JavaScript', '-e', `
+ObjC.import('AppKit')
+const board = $.NSPasteboard.generalPasteboard
+const types = ObjC.deepUnwrap(board.types)
+const classes = $.NSArray.arrayWithObject($.NSClassFromString('NSURL'))
+const urls = board.readObjectsForClassesOptions(classes, $.NSDictionary.dictionary)
+if (urls.isNil()) throw new Error('Native NSURL reader returned nil')
+const result = []
+for (let i = 0; i < urls.count; i++) {
+  const file = urls.objectAtIndex(i)
+  if (!file.isFileURL) throw new Error('Non-file URL on the pasteboard')
+  result.push(ObjC.unwrap(file.path))
+}
+JSON.stringify({ urls: result, types, nativeFileType: types.includes('public.file-url') })
+`], { encoding: 'utf8', timeout: 15_000 }))
 }
 
 function readClipboard() {
@@ -133,6 +153,11 @@ app.whenReady().then(async () => {
         if (process.platform === 'darwin') assert.equal(clipboard.nativeFileType, true)
         const actual = clipboard.urls.length ? clipboard.urls : clipboard.legacy ?? []
         assert.deepEqual(normalize(actual), normalize(expected))
+        if (process.platform === 'darwin') {
+          clipboard.jxa = readJXAClipboard()
+          assert.equal(clipboard.jxa.nativeFileType, true)
+          assert.deepEqual(normalize(clipboard.jxa.urls), normalize(expected))
+        }
         return clipboard
       })
     }
@@ -149,7 +174,10 @@ if ([System.Windows.Forms.Clipboard]::ContainsFileDropList()) { throw 'Path text
           { encoding: 'utf8', timeout: 15_000 })
         const clipboard = readClipboard()
         assert.equal(clipboard.nativeFileType, false)
-        return clipboard
+        const jxa = readJXAClipboard()
+        assert.equal(jxa.nativeFileType, false)
+        assert.deepEqual(jxa.urls, [])
+        return { ...clipboard, jxa }
       }
       return { fileDropList: false }
     })
@@ -212,29 +240,6 @@ $file = $paths[0]
       return result
     })
 
-    if (process.platform === 'darwin') {
-      await record(`jxa-reader-${label}`, () => {
-        writeClipboard(files)
-        const output = execFileSync('/usr/bin/osascript', ['-l', 'JavaScript', '-e', `
-ObjC.import('AppKit')
-const board = $.NSPasteboard.generalPasteboard
-const classes = $.NSArray.arrayWithObject($.NSClassFromString('NSURL'))
-const options = $.NSDictionary.dictionary
-const urls = board.readObjectsForClassesOptions(classes, options)
-if (urls.isNil()) throw new Error('Native NSURL reader returned nil')
-const result = []
-for (let i = 0; i < urls.count; i++) {
-  const file = urls.objectAtIndex(i)
-  if (!file.isFileURL) throw new Error('Non-file URL on the pasteboard')
-  result.push(ObjC.unwrap(file.path))
-}
-JSON.stringify(result)
-`], { encoding: 'utf8', timeout: 15_000 })
-        const actual = JSON.parse(output)
-        assert.deepEqual(normalize(actual), normalize(files))
-        return { urls: actual }
-      })
-    }
   }
   window.destroy()
 }).catch((error) => {
