@@ -5,6 +5,9 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const assert = require("node:assert/strict");
+const isProbeEntry = [__filename, __dirname].includes(
+  path.resolve(process.argv[1] || ""),
+);
 
 const report = {
   platform: process.platform,
@@ -27,16 +30,15 @@ function saveReport() {
   );
   console.log(JSON.stringify(report, null, 2));
 }
-const deadline =
-  require.main === module
-    ? setTimeout(() => {
-        report.fatalError = {
-          message: "Native probe exceeded its 90-second deadline",
-        };
-        saveReport();
-        app.exit(2);
-      }, 90_000)
-    : null;
+const deadline = isProbeEntry
+  ? setTimeout(() => {
+      report.fatalError = {
+        message: "Native probe exceeded its 90-second deadline",
+      };
+      saveReport();
+      app.exit(2);
+    }, 90_000)
+  : null;
 
 function powershell(source, files) {
   return execFileSync(
@@ -223,7 +225,7 @@ function makeFile(root, name) {
   return fs.realpathSync.native(file);
 }
 
-if (require.main === module) {
+if (isProbeEntry) {
   app.commandLine.appendSwitch("disable-gpu");
   app
     .whenReady()
