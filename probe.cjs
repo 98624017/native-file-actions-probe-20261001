@@ -33,7 +33,7 @@ function powershell(source, files) {
 }
 
 function swift(mode, file) {
-  return JSON.parse(execFileSync(path.resolve('mac-reader'), [mode, ...(file ? [file] : [])], {
+  return JSON.parse(execFileSync(path.resolve('mac-reader'), [mode, ...(Array.isArray(file) ? file : file ? [file] : [])], {
     encoding: 'utf8', timeout: 15_000
   }))
 }
@@ -80,6 +80,7 @@ function run(argv) {
   const board = $.NSPasteboard.generalPasteboard
   board.clearContents
   if (!board.writeObjects(files)) throw new Error('Native file clipboard write failed')
+  if (Number(board.pasteboardItems.count) !== argv.length) throw new Error('Native clipboard item count mismatch')
   return 'success'
 }
 `, ...files], { encoding: 'utf8', timeout: 15_000 })
@@ -146,14 +147,22 @@ app.whenReady().then(async () => {
     const root = fs.realpathSync.native(fs.mkdtempSync(path.join(base, 'native-probe-')))
     roots.push(root)
     const files = ['中文 文件 甲', '中文 文件 乙'].map((name) => makeFile(root, name))
+    if (process.platform === 'darwin') {
+      await record(`swift-native-control-${label}`, () => {
+        const writer = swift('write', files)
+        const reader = readClipboard()
+        assert.equal(reader.nativeFileType, true)
+        assert.deepEqual(normalize(reader.urls), normalize(files))
+        return { writer, reader }
+      })
+    }
     for (const count of [2, 1]) {
       await record(`clipboard-${label}-${count}`, () => {
         const expected = files.slice(0, count)
         writeClipboard(expected)
         const clipboard = readClipboard()
         if (process.platform === 'darwin') assert.equal(clipboard.nativeFileType, true)
-        const actual = clipboard.urls.length ? clipboard.urls : clipboard.legacy ?? []
-        assert.deepEqual(normalize(actual), normalize(expected))
+        assert.deepEqual(normalize(clipboard.urls), normalize(expected))
         if (process.platform === 'darwin') {
           clipboard.jxa = readJXAClipboard()
           assert.equal(clipboard.jxa.nativeFileType, true)

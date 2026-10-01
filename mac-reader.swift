@@ -61,9 +61,8 @@ do {
           const board = $.NSPasteboard.generalPasteboard
           board.clearContents
           if (!board.writeObjects(files)) throw new Error('Native file clipboard write failed')
-          return JSON.stringify({ argv, nativeCount: files.count,
-            nativePaths: argv.map((_, i) => ObjC.unwrap(files.objectAtIndex(i).path)),
-            pasteboardCount: board.pasteboardItems.count })
+          if (Number(board.pasteboardItems.count) !== argv.length) throw new Error('Native clipboard item count mismatch')
+          return 'success'
         }
         """] + urls.map { $0.path }
         try writer.run()
@@ -85,6 +84,16 @@ do {
         try emit(["selfCheck": "passed", "clipboard": report])
         try manager.removeItem(at: root)
     case "read":
+        try emit(readClipboard())
+    case "write":
+        let urls = CommandLine.arguments.dropFirst(2).map { URL(fileURLWithPath: $0) as NSURL }
+        guard !urls.isEmpty else {
+            throw NSError(domain: "NativeReader.Arguments", code: 1)
+        }
+        NSPasteboard.general.clearContents()
+        guard NSPasteboard.general.writeObjects(urls) else {
+            throw NSError(domain: "NativeReader.Write", code: 1)
+        }
         try emit(readClipboard())
     case "trash":
         guard CommandLine.arguments.count == 3 else {
