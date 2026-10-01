@@ -1,0 +1,56 @@
+name: Native File Actions Probe
+
+on:
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: Platform to probe
+        type: choice
+        default: all
+        options:
+          - all
+          - windows
+          - macos
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    name: ${{ matrix.platform }}
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: ${{ fromJSON(inputs.platform == 'all' && '["windows","macos"]' || format('["{0}"]', inputs.platform)) }}
+    runs-on: ${{ matrix.platform == 'windows' && 'windows-latest' || 'macos-latest' }}
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+
+      - name: Compile and self-check the macOS reader
+        if: ${{ runner.os == 'macOS' }}
+        timeout-minutes: 1
+        run: |
+          swiftc mac-reader.swift -o mac-reader
+          ./mac-reader self-check
+
+      - name: Install Electron only
+        timeout-minutes: 2
+        run: npm ci --no-audit --no-fund
+
+      - name: Probe native clipboard and recycling
+        timeout-minutes: 2
+        run: npx --no-install electron .
+
+      - name: Upload findings
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: native-probe-${{ matrix.platform }}-${{ github.sha }}
+          path: artifacts/
+          if-no-files-found: warn
+          retention-days: 7

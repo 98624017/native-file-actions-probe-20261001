@@ -1,0 +1,9 @@
+{
+  "name": "native-file-actions-probe",
+  "private": true,
+  "version": "1.0.0",
+  "main": "probe.cjs",
+  "devDependencies": {
+    "electron": "39.8.3"
+  }
+}
