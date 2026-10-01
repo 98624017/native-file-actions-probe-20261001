@@ -76,7 +76,12 @@ foreach ($item in $paths) { [void]$files.Add($item) }
 ObjC.import('AppKit')
 function run(argv) {
   const files = $.NSMutableArray.array
-  for (const filePath of argv) files.addObject($.NSURL.fileURLWithPath($(filePath)))
+  for (const filePath of argv) {
+    const item = $.NSPasteboardItem.alloc.init
+    const url = $.NSURL.fileURLWithPath($(filePath))
+    if (!item.setStringForType(url.absoluteString, $('public.file-url'))) throw new Error('Native file URL serialization failed')
+    files.addObject(item)
+  }
   const board = $.NSPasteboard.generalPasteboard
   board.clearContents
   if (!board.writeObjects(files)) throw new Error('Native file clipboard write failed')
@@ -159,16 +164,20 @@ app.whenReady().then(async () => {
     for (const count of [2, 1]) {
       await record(`clipboard-${label}-${count}`, () => {
         const expected = files.slice(0, count)
-        writeClipboard(expected)
-        const clipboard = readClipboard()
-        if (process.platform === 'darwin') assert.equal(clipboard.nativeFileType, true)
-        assert.deepEqual(normalize(clipboard.urls), normalize(expected))
-        if (process.platform === 'darwin') {
-          clipboard.jxa = readJXAClipboard()
-          assert.equal(clipboard.jxa.nativeFileType, true)
-          assert.deepEqual(normalize(clipboard.jxa.urls), normalize(expected))
+        let clipboard
+        const repetitions = process.platform === 'darwin' ? 10 : 1
+        for (let iteration = 0; iteration < repetitions; iteration++) {
+          writeClipboard(expected)
+          clipboard = readClipboard()
+          assert.deepEqual(normalize(clipboard.urls), normalize(expected))
+          if (process.platform === 'darwin') {
+            assert.equal(clipboard.nativeFileType, true)
+            clipboard.jxa = readJXAClipboard()
+            assert.equal(clipboard.jxa.nativeFileType, true)
+            assert.deepEqual(normalize(clipboard.jxa.urls), normalize(expected))
+          }
         }
-        return clipboard
+        return { ...clipboard, repetitions }
       })
     }
     await record(`path-text-negative-${label}`, () => {

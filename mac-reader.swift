@@ -47,34 +47,11 @@ do {
         for (index, url) in urls.enumerated() {
             try Data("synthetic-\(index)".utf8).write(to: url)
         }
-        let writer = Process()
-        let writerOutput = Pipe()
-        let writerError = Pipe()
-        writer.standardOutput = writerOutput
-        writer.standardError = writerError
-        writer.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-        writer.arguments = ["-l", "JavaScript", "-e", """
-        ObjC.import('AppKit')
-        function run(argv) {
-          const files = $.NSMutableArray.array
-          for (const filePath of argv) files.addObject($.NSURL.fileURLWithPath($(filePath)))
-          const board = $.NSPasteboard.generalPasteboard
-          board.clearContents
-          if (!board.writeObjects(files)) throw new Error('Native file clipboard write failed')
-          if (Number(board.pasteboardItems.count) !== argv.length) throw new Error('Native clipboard item count mismatch')
-          return 'success'
+        NSPasteboard.general.clearContents()
+        guard NSPasteboard.general.writeObjects(urls.map { $0 as NSURL }) else {
+            throw NSError(domain: "NativeReader.Write", code: 1)
         }
-        """] + urls.map { $0.path }
-        try writer.run()
-        writer.waitUntilExit()
-        guard writer.terminationStatus == 0 else {
-            failureContext["writerError"] = String(decoding:
-                writerError.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-            throw NSError(domain: "NativeReader.Writer", code: Int(writer.terminationStatus))
-        }
-        var report = readClipboard()
-        report["writerOutput"] = String(decoding:
-            writerOutput.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        let report = readClipboard()
         let expected = urls.map { $0.resolvingSymlinksInPath().path }.sorted()
         let modern = (report["urls"] as? [String] ?? []).sorted()
         guard report["nativeFileType"] as? Bool == true && modern == expected else {
