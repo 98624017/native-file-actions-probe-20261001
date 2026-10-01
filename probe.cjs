@@ -5,9 +5,9 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const assert = require("node:assert/strict");
-const isProbeEntry = [__filename, __dirname].includes(
-  path.resolve(process.argv[1] || ""),
-);
+const isProbeEntry = process.argv
+  .slice(1)
+  .some((argument) => [__filename, __dirname].includes(path.resolve(argument)));
 
 const report = {
   platform: process.platform,
@@ -226,6 +226,10 @@ function makeFile(root, name) {
 }
 
 if (isProbeEntry) {
+  if (!["win32", "darwin"].includes(process.platform)) {
+    console.error("Native probe requires Windows or macOS");
+    app.exit(1);
+  }
   app.commandLine.appendSwitch("disable-gpu");
   app
     .whenReady()
