@@ -79,7 +79,7 @@ async function captureAndClose(session, testInfo) {
   } finally {
     try {
       if (process.platform === "win32") {
-        execFileSync(
+        const cleanup = execFileSync(
           "powershell.exe",
           [
             "-NoProfile",
@@ -90,26 +90,50 @@ async function captureAndClose(session, testInfo) {
               `
 $ErrorActionPreference='Stop'
 $ProgressPreference='SilentlyContinue'
+[Console]::OutputEncoding=[System.Text.UTF8Encoding]::new($false)
 $root=$env:NATIVE_UI_ROOT.TrimEnd('\\')
+$closed=@()
 foreach($window in @((New-Object -ComObject Shell.Application).Windows())) {
   if(([string]$window.LocationURL).StartsWith('file:')) {
     $directory=([Uri]$window.LocationURL).LocalPath.TrimEnd('\\')
-    if($directory.Equals($root,[StringComparison]::OrdinalIgnoreCase) -or $directory.StartsWith($root+'\\',[StringComparison]::OrdinalIgnoreCase)) {$window.Quit()}
+    if($directory.Equals($root,[StringComparison]::OrdinalIgnoreCase) -or $directory.StartsWith($root+'\\',[StringComparison]::OrdinalIgnoreCase)) {
+      $window.Quit()
+      $closed+=@{kind='explorer-window';path=$directory}
+    }
   }
 }
+Add-Type -AssemblyName System.Management
+$searcher=[System.Management.ManagementObjectSearcher]::new("SELECT ProcessId, CommandLine FROM Win32_Process WHERE Name = 'notepad.exe'")
+try {
+  foreach($item in $searcher.Get()) {
+    if(([string]$item.CommandLine).IndexOf($root+'\\',[StringComparison]::OrdinalIgnoreCase) -ge 0) {
+      $native=[Diagnostics.Process]::GetProcessById([int]$item.ProcessId)
+      try {
+        $native.Kill()
+        if(-not $native.WaitForExit(2000)) {throw 'Synthetic Notepad did not exit'}
+      } finally {$native.Dispose()}
+      $closed+=@{kind='synthetic-notepad';processId=$item.ProcessId}
+    }
+  }
+} finally {$searcher.Dispose()}
+ConvertTo-Json -Compress -InputObject $closed
 `,
               "utf16le",
             ).toString("base64"),
           ],
           {
             encoding: "utf8",
-            timeout: 10_000,
+            timeout: 20_000,
             env: {
               ...process.env,
               NATIVE_UI_ROOT: fs.realpathSync.native(root),
             },
           },
         );
+        await testInfo.attach("scoped-native-cleanup", {
+          body: cleanup,
+          contentType: "application/json",
+        });
       }
     } finally {
       try {
