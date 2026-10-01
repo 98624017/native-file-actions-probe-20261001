@@ -22,6 +22,10 @@ func readClipboard() -> [String: Any] {
         "urls": urls.map { $0.resolvingSymlinksInPath().path },
         "legacy": legacy.map { URL(fileURLWithPath: $0).resolvingSymlinksInPath().path },
         "types": (pasteboard.types ?? []).map { $0.rawValue },
+        "items": (pasteboard.pasteboardItems ?? []).map { item in [
+            "types": item.types.map { $0.rawValue },
+            "fileURL": item.string(forType: .fileURL) ?? ""
+        ] as [String: Any] },
         "allFileURLs": urls.allSatisfy { $0.isFileURL },
         "nativeFileType": (pasteboard.types ?? []).contains(.fileURL) ||
             (pasteboard.types ?? []).contains(NSPasteboard.PasteboardType("NSFilenamesPboardType"))
@@ -57,7 +61,9 @@ do {
           const board = $.NSPasteboard.generalPasteboard
           board.clearContents
           if (!board.writeObjects(files)) throw new Error('Native file clipboard write failed')
-          return 'success'
+          return JSON.stringify({ argv, nativeCount: files.count,
+            nativePaths: argv.map((_, i) => ObjC.unwrap(files.objectAtIndex(i).path)),
+            pasteboardCount: board.pasteboardItems.count })
         }
         """] + urls.map { $0.path }
         try writer.run()
@@ -67,7 +73,9 @@ do {
                 writerError.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
             throw NSError(domain: "NativeReader.Writer", code: Int(writer.terminationStatus))
         }
-        let report = readClipboard()
+        var report = readClipboard()
+        report["writerOutput"] = String(decoding:
+            writerOutput.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
         let expected = urls.map { $0.resolvingSymlinksInPath().path }.sorted()
         let modern = (report["urls"] as? [String] ?? []).sorted()
         guard report["nativeFileType"] as? Bool == true && modern == expected else {

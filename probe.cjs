@@ -132,8 +132,9 @@ async function record(name, operation) {
 }
 
 function makeFile(root, name) {
-  const file = path.join(root, name + '.txt')
-  fs.writeFileSync(file, 'synthetic file bytes: ' + name, 'utf8')
+  const uniqueName = name + ' ' + path.basename(root)
+  const file = path.join(root, uniqueName + '.txt')
+  fs.writeFileSync(file, 'synthetic file bytes: ' + uniqueName, 'utf8')
   return fs.realpathSync.native(file)
 }
 
